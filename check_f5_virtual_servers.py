@@ -62,6 +62,7 @@ class F5VirtualServerCheck:
         self.warning_conns = args.warning
         self.critical_conns = args.critical
         self.verbose = args.verbose
+        self.include_perfdata = args.perfdata
         
         self.exit_code = STATE_OK
         self.output_msg = ""
@@ -152,13 +153,111 @@ class F5VirtualServerCheck:
                 print(f"Warning: Error converting '{value}' to integer: {e}, using default {default}")
             return default
 
-    def get_vs_info(self, vs_index):
+    def bulk_snmp_get(self, oid_list):
+        """Get multiple OIDs in a single SNMP request"""
+        if not oid_list:
+            return {}
+            
+        results = {}
+        try:
+            object_types = [ObjectType(ObjectIdentity(oid)) for oid in oid_list]
+            
+            for (errorIndication, errorStatus, errorIndex, varBinds) in getCmd(
+                SnmpEngine(),
+                CommunityData(self.community),
+                UdpTransportTarget((self.host, self.port), timeout=self.timeout, retries=self.retries),
+                ContextData(),
+                *object_types,
+                lexicographicMode=False,
+                ignoreNonIncreasingOid=False
+            ):
+                if errorIndication:
+                    if self.verbose:
+                        print(f"SNMP bulk error: {errorIndication}")
+                    break
+                elif errorStatus:
+                    if self.verbose:
+                        print(f"SNMP bulk error: {errorStatus.prettyPrint()}")
+                    break
+                else:
+                    for i, varBind in enumerate(varBinds):
+                        oid = oid_list[i]
+                        results[oid] = varBind[1]
+        except Exception as e:
+            if self.verbose:
+                print(f"SNMP bulk GET error: {e}")
+        return results
+
+    def get_vs_info(self, vs_index, bulk_data=None):
         """Get detailed information for a specific virtual server"""
         vs_info = {}
         
-        # Get virtual server name
-        name_oid = f"{F5_VS_NAME_OID}.{vs_index}"
-        name_value = self.snmp_get(name_oid)
+        if bulk_data:
+            # Use pre-fetched bulk data
+            name_oid = f"{F5_VS_NAME_OID}.{vs_index}"
+            status_oid = f"{F5_VS_STATUS_OID}.{vs_index}"
+            enabled_oid = f"{F5_VS_ENABLED_OID}.{vs_index}"
+            reason_oid = f"{F5_VS_REASON_OID}.{vs_index}"
+            cur_conns_oid = f"{F5_VS_CUR_CONNS_OID}.{vs_index}"
+            
+            # Get basic info from bulk data
+            name_value = bulk_data.get(name_oid)
+            avail_state = bulk_data.get(status_oid)
+            enabled_state = bulk_data.get(enabled_oid)
+            reason = bulk_data.get(reason_oid)
+            cur_conns = bulk_data.get(cur_conns_oid)
+            
+            # Only get performance data if requested
+            if self.include_perfdata:
+                max_conns_oid = f"{F5_VS_MAX_CONNS_OID}.{vs_index}"
+                bytes_in_oid = f"{F5_VS_BYTES_IN_OID}.{vs_index}"
+                bytes_out_oid = f"{F5_VS_BYTES_OUT_OID}.{vs_index}"
+                pkts_in_oid = f"{F5_VS_PKTS_IN_OID}.{vs_index}"
+                pkts_out_oid = f"{F5_VS_PKTS_OUT_OID}.{vs_index}"
+                
+                max_conns = bulk_data.get(max_conns_oid)
+                bytes_in = bulk_data.get(bytes_in_oid)
+                bytes_out = bulk_data.get(bytes_out_oid)
+                pkts_in = bulk_data.get(pkts_in_oid)
+                pkts_out = bulk_data.get(pkts_out_oid)
+            else:
+                max_conns = bytes_in = bytes_out = pkts_in = pkts_out = None
+        else:
+            # Fallback to individual requests
+            name_oid = f"{F5_VS_NAME_OID}.{vs_index}"
+            name_value = self.snmp_get(name_oid)
+            
+            status_oid = f"{F5_VS_STATUS_OID}.{vs_index}"
+            avail_state = self.snmp_get(status_oid)
+            
+            enabled_oid = f"{F5_VS_ENABLED_OID}.{vs_index}"
+            enabled_state = self.snmp_get(enabled_oid)
+            
+            reason_oid = f"{F5_VS_REASON_OID}.{vs_index}"
+            reason = self.snmp_get(reason_oid)
+            
+            cur_conns_oid = f"{F5_VS_CUR_CONNS_OID}.{vs_index}"
+            cur_conns = self.snmp_get(cur_conns_oid)
+            
+            if self.include_perfdata:
+                max_conns_oid = f"{F5_VS_MAX_CONNS_OID}.{vs_index}"
+                max_conns = self.snmp_get(max_conns_oid)
+                
+                bytes_in_oid = f"{F5_VS_BYTES_IN_OID}.{vs_index}"
+                bytes_in = self.snmp_get(bytes_in_oid)
+                
+                bytes_out_oid = f"{F5_VS_BYTES_OUT_OID}.{vs_index}"
+                bytes_out = self.snmp_get(bytes_out_oid)
+                
+                pkts_in_oid = f"{F5_VS_PKTS_IN_OID}.{vs_index}"
+                pkts_in = self.snmp_get(pkts_in_oid)
+                
+                pkts_out_oid = f"{F5_VS_PKTS_OUT_OID}.{vs_index}"
+                pkts_out = self.snmp_get(pkts_out_oid)
+            else:
+                max_conns = bytes_in = bytes_out = pkts_in = pkts_out = None
+        
+        # Process the data
         if name_value:
             try:
                 vs_info['name'] = str(name_value) if hasattr(name_value, '__str__') else f"VS_{vs_index}"
@@ -167,52 +266,32 @@ class F5VirtualServerCheck:
         else:
             vs_info['name'] = f"VS_{vs_index}"
         
-        # Get availability state
-        status_oid = f"{F5_VS_STATUS_OID}.{vs_index}"
-        avail_state = self.snmp_get(status_oid)
         vs_info['avail_state'] = self.safe_int_convert(avail_state, 4)
         vs_info['avail_state_str'] = VS_AVAIL_STATES.get(vs_info['avail_state'], "unknown")
         
-        # Get enabled state
-        enabled_oid = f"{F5_VS_ENABLED_OID}.{vs_index}"
-        enabled_state = self.snmp_get(enabled_oid)
         vs_info['enabled_state'] = self.safe_int_convert(enabled_state, 0)
         vs_info['enabled_state_str'] = VS_ENABLED_STATES.get(vs_info['enabled_state'], "unknown")
         
-        # Get status reason
-        reason_oid = f"{F5_VS_REASON_OID}.{vs_index}"
-        reason = self.snmp_get(reason_oid)
         try:
             vs_info['reason'] = str(reason) if reason else "Unknown"
         except:
             vs_info['reason'] = "Unknown"
         
-        # Get current connections
-        cur_conns_oid = f"{F5_VS_CUR_CONNS_OID}.{vs_index}"
-        cur_conns = self.snmp_get(cur_conns_oid)
         vs_info['cur_conns'] = self.safe_int_convert(cur_conns, 0)
         
-        # Get connection limit
-        max_conns_oid = f"{F5_VS_MAX_CONNS_OID}.{vs_index}"
-        max_conns = self.snmp_get(max_conns_oid)
-        vs_info['max_conns'] = self.safe_int_convert(max_conns, 0)
-        
-        # Get traffic statistics
-        bytes_in_oid = f"{F5_VS_BYTES_IN_OID}.{vs_index}"
-        bytes_in = self.snmp_get(bytes_in_oid)
-        vs_info['bytes_in'] = self.safe_int_convert(bytes_in, 0)
-        
-        bytes_out_oid = f"{F5_VS_BYTES_OUT_OID}.{vs_index}"
-        bytes_out = self.snmp_get(bytes_out_oid)
-        vs_info['bytes_out'] = self.safe_int_convert(bytes_out, 0)
-        
-        pkts_in_oid = f"{F5_VS_PKTS_IN_OID}.{vs_index}"
-        pkts_in = self.snmp_get(pkts_in_oid)
-        vs_info['pkts_in'] = self.safe_int_convert(pkts_in, 0)
-        
-        pkts_out_oid = f"{F5_VS_PKTS_OUT_OID}.{vs_index}"
-        pkts_out = self.snmp_get(pkts_out_oid)
-        vs_info['pkts_out'] = self.safe_int_convert(pkts_out, 0)
+        # Only include performance data if requested
+        if self.include_perfdata:
+            vs_info['max_conns'] = self.safe_int_convert(max_conns, 0)
+            vs_info['bytes_in'] = self.safe_int_convert(bytes_in, 0)
+            vs_info['bytes_out'] = self.safe_int_convert(bytes_out, 0)
+            vs_info['pkts_in'] = self.safe_int_convert(pkts_in, 0)
+            vs_info['pkts_out'] = self.safe_int_convert(pkts_out, 0)
+        else:
+            vs_info['max_conns'] = 0
+            vs_info['bytes_in'] = 0
+            vs_info['bytes_out'] = 0
+            vs_info['pkts_in'] = 0
+            vs_info['pkts_out'] = 0
         
         return vs_info
         
@@ -239,13 +318,44 @@ class F5VirtualServerCheck:
                     return
                 vs_names = filtered_vs
             
+            # Build list of OIDs for bulk request - only get what we need
+            bulk_oids = []
+            for vs_index in vs_names.keys():
+                # Always get basic status info
+                bulk_oids.extend([
+                    f"{F5_VS_NAME_OID}.{vs_index}",
+                    f"{F5_VS_STATUS_OID}.{vs_index}",
+                    f"{F5_VS_ENABLED_OID}.{vs_index}",
+                    f"{F5_VS_REASON_OID}.{vs_index}",
+                    f"{F5_VS_CUR_CONNS_OID}.{vs_index}"
+                ])
+                
+                # Only add performance data OIDs if requested
+                if self.include_perfdata:
+                    bulk_oids.extend([
+                        f"{F5_VS_MAX_CONNS_OID}.{vs_index}",
+                        f"{F5_VS_BYTES_IN_OID}.{vs_index}",
+                        f"{F5_VS_BYTES_OUT_OID}.{vs_index}",
+                        f"{F5_VS_PKTS_IN_OID}.{vs_index}",
+                        f"{F5_VS_PKTS_OUT_OID}.{vs_index}"
+                    ])
+            
+            # Get all data in bulk requests (SNMP has limits, so chunk if needed)
+            bulk_data = {}
+            chunk_size = 20  # Reasonable chunk size for SNMP
+            
+            for i in range(0, len(bulk_oids), chunk_size):
+                chunk = bulk_oids[i:i + chunk_size]
+                chunk_data = self.bulk_snmp_get(chunk)
+                bulk_data.update(chunk_data)
+            
             # Check each virtual server
             vs_results = []
             critical_vs = []
             warning_vs = []
             
             for vs_index in vs_names.keys():
-                vs_info = self.get_vs_info(vs_index)
+                vs_info = self.get_vs_info(vs_index, bulk_data)
                 vs_results.append(vs_info)
                 
                 # Determine status
@@ -279,13 +389,14 @@ class F5VirtualServerCheck:
                         if vs_info['name'] not in warning_vs:
                             warning_vs.append(vs_info['name'])
                 
-                # Add performance data
-                vs_name_clean = re.sub(r'[^a-zA-Z0-9_-]', '_', vs_info['name'])
-                self.perfdata.append(f"'{vs_name_clean}_connections'={vs_info['cur_conns']};{self.warning_conns or ''};{self.critical_conns or ''};0;{vs_info['max_conns'] if vs_info['max_conns'] > 0 else ''}")
-                self.perfdata.append(f"'{vs_name_clean}_bytes_in'={vs_info['bytes_in']}c")
-                self.perfdata.append(f"'{vs_name_clean}_bytes_out'={vs_info['bytes_out']}c")
-                self.perfdata.append(f"'{vs_name_clean}_packets_in'={vs_info['pkts_in']}c")
-                self.perfdata.append(f"'{vs_name_clean}_packets_out'={vs_info['pkts_out']}c")
+                # Add performance data only if requested
+                if self.include_perfdata:
+                    vs_name_clean = re.sub(r'[^a-zA-Z0-9_-]', '_', vs_info['name'])
+                    self.perfdata.append(f"'{vs_name_clean}_connections'={vs_info['cur_conns']};{self.warning_conns or ''};{self.critical_conns or ''};0;{vs_info['max_conns'] if vs_info['max_conns'] > 0 else ''}")
+                    self.perfdata.append(f"'{vs_name_clean}_bytes_in'={vs_info['bytes_in']}c")
+                    self.perfdata.append(f"'{vs_name_clean}_bytes_out'={vs_info['bytes_out']}c")
+                    self.perfdata.append(f"'{vs_name_clean}_packets_in'={vs_info['pkts_in']}c")
+                    self.perfdata.append(f"'{vs_name_clean}_packets_out'={vs_info['pkts_out']}c")
             
             # Determine overall exit code
             if critical_vs:
@@ -338,6 +449,7 @@ def main():
     parser.add_argument('-w', '--warning', type=int, help='Warning threshold for current connections')
     parser.add_argument('-c', '--critical', type=int, help='Critical threshold for current connections')
     parser.add_argument('--verbose', action='store_true', help='Verbose output for debugging')
+    parser.add_argument('--perfdata', action='store_true', help='Include performance data (slower but provides metrics for graphing)')
     
     args = parser.parse_args()
     
@@ -352,7 +464,7 @@ def main():
     
     # Output results on single line
     output = check.output_msg
-    if check.perfdata:
+    if check.include_perfdata and check.perfdata:
         output += f" | {' '.join(check.perfdata)}"
     
     print(output)
