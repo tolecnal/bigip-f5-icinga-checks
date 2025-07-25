@@ -123,57 +123,96 @@ class F5VirtualServerCheck:
                 print(f"SNMP WALK error for OID {oid}: {e}")
         return results
         
+    def safe_int_convert(self, value, default=0):
+        """Safely convert SNMP value to integer"""
+        if value is None:
+            return default
+        try:
+            # Handle different SNMP data types
+            if hasattr(value, 'prettyPrint'):
+                str_val = value.prettyPrint()
+            else:
+                str_val = str(value)
+            
+            # Remove any non-numeric characters and convert
+            if str_val.isdigit():
+                return int(str_val)
+            else:
+                # Try to extract numeric part
+                import re
+                numeric_match = re.search(r'\d+', str_val)
+                if numeric_match:
+                    return int(numeric_match.group())
+                else:
+                    if self.verbose:
+                        print(f"Warning: Could not convert '{str_val}' to integer, using default {default}")
+                    return default
+        except (ValueError, AttributeError) as e:
+            if self.verbose:
+                print(f"Warning: Error converting '{value}' to integer: {e}, using default {default}")
+            return default
+
     def get_vs_info(self, vs_index):
         """Get detailed information for a specific virtual server"""
         vs_info = {}
         
         # Get virtual server name
         name_oid = f"{F5_VS_NAME_OID}.{vs_index}"
-        vs_info['name'] = str(self.snmp_get(name_oid) or f"VS_{vs_index}")
+        name_value = self.snmp_get(name_oid)
+        if name_value:
+            try:
+                vs_info['name'] = str(name_value) if hasattr(name_value, '__str__') else f"VS_{vs_index}"
+            except:
+                vs_info['name'] = f"VS_{vs_index}"
+        else:
+            vs_info['name'] = f"VS_{vs_index}"
         
         # Get availability state
         status_oid = f"{F5_VS_STATUS_OID}.{vs_index}"
         avail_state = self.snmp_get(status_oid)
-        vs_info['avail_state'] = int(avail_state) if avail_state is not None else 4
+        vs_info['avail_state'] = self.safe_int_convert(avail_state, 4)
         vs_info['avail_state_str'] = VS_AVAIL_STATES.get(vs_info['avail_state'], "unknown")
         
         # Get enabled state
         enabled_oid = f"{F5_VS_ENABLED_OID}.{vs_index}"
         enabled_state = self.snmp_get(enabled_oid)
-        vs_info['enabled_state'] = int(enabled_state) if enabled_state is not None else 0
+        vs_info['enabled_state'] = self.safe_int_convert(enabled_state, 0)
         vs_info['enabled_state_str'] = VS_ENABLED_STATES.get(vs_info['enabled_state'], "unknown")
         
         # Get status reason
         reason_oid = f"{F5_VS_REASON_OID}.{vs_index}"
         reason = self.snmp_get(reason_oid)
-        vs_info['reason'] = str(reason) if reason else "Unknown"
+        try:
+            vs_info['reason'] = str(reason) if reason else "Unknown"
+        except:
+            vs_info['reason'] = "Unknown"
         
         # Get current connections
         cur_conns_oid = f"{F5_VS_CUR_CONNS_OID}.{vs_index}"
         cur_conns = self.snmp_get(cur_conns_oid)
-        vs_info['cur_conns'] = int(cur_conns) if cur_conns is not None else 0
+        vs_info['cur_conns'] = self.safe_int_convert(cur_conns, 0)
         
         # Get connection limit
         max_conns_oid = f"{F5_VS_MAX_CONNS_OID}.{vs_index}"
         max_conns = self.snmp_get(max_conns_oid)
-        vs_info['max_conns'] = int(max_conns) if max_conns is not None else 0
+        vs_info['max_conns'] = self.safe_int_convert(max_conns, 0)
         
         # Get traffic statistics
         bytes_in_oid = f"{F5_VS_BYTES_IN_OID}.{vs_index}"
         bytes_in = self.snmp_get(bytes_in_oid)
-        vs_info['bytes_in'] = int(bytes_in) if bytes_in is not None else 0
+        vs_info['bytes_in'] = self.safe_int_convert(bytes_in, 0)
         
         bytes_out_oid = f"{F5_VS_BYTES_OUT_OID}.{vs_index}"
         bytes_out = self.snmp_get(bytes_out_oid)
-        vs_info['bytes_out'] = int(bytes_out) if bytes_out is not None else 0
+        vs_info['bytes_out'] = self.safe_int_convert(bytes_out, 0)
         
         pkts_in_oid = f"{F5_VS_PKTS_IN_OID}.{vs_index}"
         pkts_in = self.snmp_get(pkts_in_oid)
-        vs_info['pkts_in'] = int(pkts_in) if pkts_in is not None else 0
+        vs_info['pkts_in'] = self.safe_int_convert(pkts_in, 0)
         
         pkts_out_oid = f"{F5_VS_PKTS_OUT_OID}.{vs_index}"
         pkts_out = self.snmp_get(pkts_out_oid)
-        vs_info['pkts_out'] = int(pkts_out) if pkts_out is not None else 0
+        vs_info['pkts_out'] = self.safe_int_convert(pkts_out, 0)
         
         return vs_info
         
