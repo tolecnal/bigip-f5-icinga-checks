@@ -49,15 +49,12 @@ def snmp_get(host, community, oids, port=161, timeout=10):
     
     for oid_name, oid in oids.items():
         try:
-            for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
+            for (errorIndication, errorStatus, errorIndex, varBinds) in getCmd(
                 SnmpEngine(),
                 CommunityData(community),
                 UdpTransportTarget((host, port), timeout=timeout),
                 ContextData(),
-                ObjectType(ObjectIdentity(oid)),
-                lexicographicMode=False,
-                ignoreNonIncreasingOid=True,
-                maxRows=1):
+                ObjectType(ObjectIdentity(oid))):
                 
                 if errorIndication:
                     print(f"SNMP Error: {errorIndication}")
@@ -67,11 +64,16 @@ def snmp_get(host, community, oids, port=161, timeout=10):
                     sys.exit(ERRORS['UNKNOWN'])
                 else:
                     for varBind in varBinds:
-                        results[oid] = int(varBind[1])
+                        # Convert the value to int, handling different return types
+                        try:
+                            results[oid] = int(varBind[1])
+                        except (ValueError, TypeError):
+                            # If conversion fails, try to get the raw value
+                            results[oid] = int(str(varBind[1]))
                         break
                     break
         except Exception as e:
-            print(f"SNMP connection failed to {host}: {e}")
+            print(f"SNMP Error for OID {oid}: {e}")
             sys.exit(ERRORS['UNKNOWN'])
     
     return results
