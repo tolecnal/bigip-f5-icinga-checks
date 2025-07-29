@@ -20,25 +20,29 @@ Version: 1.0 (Python conversion with named arguments)
 import sys
 import time
 import argparse
-from pysnmp.hlapi import *
+from pysnmp.hlapi import (
+    getCmd,
+    SnmpEngine,
+    CommunityData,
+    UdpTransportTarget,
+    ContextData,
+    ObjectType,
+    ObjectIdentity,
+)
 from pysnmp.error import PySnmpError
 
 # Nagios/Icinga exit codes
-ERRORS = {
-    'OK': 0,
-    'WARNING': 1,
-    'CRITICAL': 2,
-    'UNKNOWN': 3
-}
+ERRORS = {"OK": 0, "WARNING": 1, "CRITICAL": 2, "UNKNOWN": 3}
 
 # F5 SNMP OIDs
 OIDS = {
-    'tmmTotalCyl': '1.3.6.1.4.1.3375.2.1.1.2.1.41.0',
-    'tmmIdleCyl': '1.3.6.1.4.1.3375.2.1.1.2.1.42.0',
-    'tmmSleepCyl': '1.3.6.1.4.1.3375.2.1.1.2.1.43.0',
-    'sysStatMemoryTotal': '1.3.6.1.4.1.3375.2.1.1.2.1.44.0',
-    'sysStatMemoryUsed': '1.3.6.1.4.1.3375.2.1.1.2.1.45.0'
+    "tmmTotalCyl": "1.3.6.1.4.1.3375.2.1.1.2.1.41.0",
+    "tmmIdleCyl": "1.3.6.1.4.1.3375.2.1.1.2.1.42.0",
+    "tmmSleepCyl": "1.3.6.1.4.1.3375.2.1.1.2.1.43.0",
+    "sysStatMemoryTotal": "1.3.6.1.4.1.3375.2.1.1.2.1.44.0",
+    "sysStatMemoryUsed": "1.3.6.1.4.1.3375.2.1.1.2.1.45.0",
 }
+
 
 def snmp_get(host, community, oids, port=161, timeout=10):
     """
@@ -49,19 +53,21 @@ def snmp_get(host, community, oids, port=161, timeout=10):
 
     for oid_name, oid in oids.items():
         try:
-            for (errorIndication, errorStatus, errorIndex, varBinds) in getCmd(
+            for errorIndication, errorStatus, errorIndex, varBinds in getCmd(
                 SnmpEngine(),
                 CommunityData(community),
                 UdpTransportTarget((host, port), timeout=timeout),
                 ContextData(),
-                ObjectType(ObjectIdentity(oid))):
-
+                ObjectType(ObjectIdentity(oid)),
+            ):
                 if errorIndication:
                     print(f"SNMP Error: {errorIndication}")
-                    sys.exit(ERRORS['UNKNOWN'])
+                    sys.exit(ERRORS["UNKNOWN"])
                 elif errorStatus:
-                    print(f"SNMP Error: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or '?'}")
-                    sys.exit(ERRORS['UNKNOWN'])
+                    print(
+                        f"SNMP Error: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or '?'}"
+                    )
+                    sys.exit(ERRORS["UNKNOWN"])
                 else:
                     for varBind in varBinds:
                         # Convert the value to int, handling different return types
@@ -74,18 +80,19 @@ def snmp_get(host, community, oids, port=161, timeout=10):
                     break
         except Exception as e:
             print(f"SNMP Error for OID {oid}: {e}")
-            sys.exit(ERRORS['UNKNOWN'])
+            sys.exit(ERRORS["UNKNOWN"])
 
     return results
+
 
 def calculate_cpu_utilization(host, community, port=161, timeout=10):
     """
     Calculate F5 TMM CPU utilization by polling twice with 10 second interval
     """
     cpu_oids = {
-        'tmmTotalCyl': OIDS['tmmTotalCyl'],
-        'tmmIdleCyl': OIDS['tmmIdleCyl'],
-        'tmmSleepCyl': OIDS['tmmSleepCyl']
+        "tmmTotalCyl": OIDS["tmmTotalCyl"],
+        "tmmIdleCyl": OIDS["tmmIdleCyl"],
+        "tmmSleepCyl": OIDS["tmmSleepCyl"],
     }
 
     # First poll
@@ -98,9 +105,9 @@ def calculate_cpu_utilization(host, community, port=161, timeout=10):
     poll_1 = snmp_get(host, community, cpu_oids, port, timeout)
 
     # Calculate CPU utilization
-    total_diff = poll_1[OIDS['tmmTotalCyl']] - poll_0[OIDS['tmmTotalCyl']]
-    idle_diff = poll_1[OIDS['tmmIdleCyl']] - poll_0[OIDS['tmmIdleCyl']]
-    sleep_diff = poll_1[OIDS['tmmSleepCyl']] - poll_0[OIDS['tmmSleepCyl']]
+    total_diff = poll_1[OIDS["tmmTotalCyl"]] - poll_0[OIDS["tmmTotalCyl"]]
+    idle_diff = poll_1[OIDS["tmmIdleCyl"]] - poll_0[OIDS["tmmIdleCyl"]]
+    sleep_diff = poll_1[OIDS["tmmSleepCyl"]] - poll_0[OIDS["tmmSleepCyl"]]
 
     if total_diff == 0:
         return 0
@@ -108,84 +115,100 @@ def calculate_cpu_utilization(host, community, port=161, timeout=10):
     cpu_util = ((total_diff - (idle_diff + sleep_diff)) / total_diff) * 100
     return round(cpu_util)
 
+
 def calculate_memory_utilization(host, community, port=161, timeout=10):
     """
     Calculate F5 memory utilization percentage
     """
     mem_oids = {
-        'sysStatMemoryTotal': OIDS['sysStatMemoryTotal'],
-        'sysStatMemoryUsed': OIDS['sysStatMemoryUsed']
+        "sysStatMemoryTotal": OIDS["sysStatMemoryTotal"],
+        "sysStatMemoryUsed": OIDS["sysStatMemoryUsed"],
     }
 
     mem_data = snmp_get(host, community, mem_oids, port, timeout)
 
-    if mem_data[OIDS['sysStatMemoryTotal']] == 0:
+    if mem_data[OIDS["sysStatMemoryTotal"]] == 0:
         return 0
 
-    mem_util = (mem_data[OIDS['sysStatMemoryUsed']] / mem_data[OIDS['sysStatMemoryTotal']]) * 100
+    mem_util = (
+        mem_data[OIDS["sysStatMemoryUsed"]] / mem_data[OIDS["sysStatMemoryTotal"]]
+    ) * 100
     return round(mem_util)
+
 
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description='Check F5 CPU and Memory utilization via SNMP',
+        description="Check F5 CPU and Memory utilization via SNMP",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s -H 192.168.1.100 -c public -w 80 -c 90 -W 75 -C 85
   %(prog)s --hostname f5.example.com --community private --cpu-warn 70 --cpu-crit 85 --mem-warn 80 --mem-crit 95
-        """
+        """,
     )
 
     # Required arguments
-    parser.add_argument('-H', '--hostname',
-                       required=True,
-                       help='F5 hostname or IP address')
+    parser.add_argument(
+        "-H", "--hostname", required=True, help="F5 hostname or IP address"
+    )
 
-    parser.add_argument('-c', '--community',
-                       required=True,
-                       help='SNMP community string')
+    parser.add_argument(
+        "-c", "--community", required=True, help="SNMP community string"
+    )
 
     # CPU thresholds
-    parser.add_argument('-w', '--cpu-warn',
-                       type=int,
-                       required=True,
-                       metavar='PERCENT',
-                       help='CPU warning threshold (percentage)')
+    parser.add_argument(
+        "-w",
+        "--cpu-warn",
+        type=int,
+        required=True,
+        metavar="PERCENT",
+        help="CPU warning threshold (percentage)",
+    )
 
-    parser.add_argument('-W', '--cpu-crit',
-                       type=int,
-                       required=True,
-                       metavar='PERCENT',
-                       help='CPU critical threshold (percentage)')
+    parser.add_argument(
+        "-W",
+        "--cpu-crit",
+        type=int,
+        required=True,
+        metavar="PERCENT",
+        help="CPU critical threshold (percentage)",
+    )
 
     # Memory thresholds
-    parser.add_argument('-m', '--mem-warn',
-                       type=int,
-                       required=True,
-                       metavar='PERCENT',
-                       help='Memory warning threshold (percentage)')
+    parser.add_argument(
+        "-m",
+        "--mem-warn",
+        type=int,
+        required=True,
+        metavar="PERCENT",
+        help="Memory warning threshold (percentage)",
+    )
 
-    parser.add_argument('-M', '--mem-crit',
-                       type=int,
-                       required=True,
-                       metavar='PERCENT',
-                       help='Memory critical threshold (percentage)')
+    parser.add_argument(
+        "-M",
+        "--mem-crit",
+        type=int,
+        required=True,
+        metavar="PERCENT",
+        help="Memory critical threshold (percentage)",
+    )
 
     # Optional arguments
-    parser.add_argument('-p', '--port',
-                       type=int,
-                       default=161,
-                       help='SNMP port (default: 161)')
+    parser.add_argument(
+        "-p", "--port", type=int, default=161, help="SNMP port (default: 161)"
+    )
 
-    parser.add_argument('-t', '--timeout',
-                       type=int,
-                       default=10,
-                       help='SNMP timeout in seconds (default: 10)')
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=int,
+        default=10,
+        help="SNMP timeout in seconds (default: 10)",
+    )
 
-    parser.add_argument('-v', '--version',
-                       action='version',
-                       version='%(prog)s 1.0')
+    parser.add_argument("-v", "--version", action="version", version="%(prog)s 1.0")
 
     args = parser.parse_args()
 
@@ -204,6 +227,7 @@ Examples:
 
     return args
 
+
 def main():
     args = parse_arguments()
 
@@ -216,36 +240,48 @@ def main():
 
     try:
         # Get CPU utilization
-        cpu_percent = calculate_cpu_utilization(host, community, args.port, args.timeout)
+        cpu_percent = calculate_cpu_utilization(
+            host, community, args.port, args.timeout
+        )
 
         # Get memory utilization
-        mem_percent = calculate_memory_utilization(host, community, args.port, args.timeout)
+        mem_percent = calculate_memory_utilization(
+            host, community, args.port, args.timeout
+        )
 
         # Determine exit code and messages
-        exit_code = ERRORS['OK']
+        exit_code = ERRORS["OK"]
         messages = []
 
         # Check critical thresholds first
         if cpu_percent > cpu_crit:
-            messages.append(f"CRITICAL: TMM CPU utilization on {host} is higher than threshold ({cpu_crit}) - {cpu_percent}%")
-            exit_code = ERRORS['CRITICAL']
+            messages.append(
+                f"CRITICAL: TMM CPU utilization on {host} is higher than threshold ({cpu_crit}) - {cpu_percent}%"
+            )
+            exit_code = ERRORS["CRITICAL"]
 
         if mem_percent > mem_crit:
-            messages.append(f"CRITICAL: TMM Memory utilization on {host} is higher than threshold ({mem_crit}) - {mem_percent}%")
-            exit_code = ERRORS['CRITICAL']
+            messages.append(
+                f"CRITICAL: TMM Memory utilization on {host} is higher than threshold ({mem_crit}) - {mem_percent}%"
+            )
+            exit_code = ERRORS["CRITICAL"]
 
         # Check warning thresholds (only if not already critical)
-        if exit_code != ERRORS['CRITICAL']:
+        if exit_code != ERRORS["CRITICAL"]:
             if cpu_percent > cpu_warn:
-                messages.append(f"WARNING: TMM CPU utilization on {host} is higher than threshold ({cpu_warn}) - {cpu_percent}%")
-                exit_code = ERRORS['WARNING']
+                messages.append(
+                    f"WARNING: TMM CPU utilization on {host} is higher than threshold ({cpu_warn}) - {cpu_percent}%"
+                )
+                exit_code = ERRORS["WARNING"]
 
             if mem_percent > mem_warn:
-                messages.append(f"WARNING: TMM Memory utilization on {host} is higher than threshold ({mem_warn}) - {mem_percent}%")
-                exit_code = ERRORS['WARNING']
+                messages.append(
+                    f"WARNING: TMM Memory utilization on {host} is higher than threshold ({mem_warn}) - {mem_percent}%"
+                )
+                exit_code = ERRORS["WARNING"]
 
         # If everything is OK
-        if exit_code == ERRORS['OK']:
+        if exit_code == ERRORS["OK"]:
             messages.append(f"OK: TMM CPU on {host} is {cpu_percent}%")
             messages.append(f"OK: TMM Memory utilization on {host} is {mem_percent}%")
 
@@ -254,16 +290,19 @@ def main():
             print(message)
 
         # Add performance data for Icinga2/Nagios
-        print(f"|cpu={cpu_percent}%;{cpu_warn};{cpu_crit};0;100 memory={mem_percent}%;{mem_warn};{mem_crit};0;100")
+        print(
+            f"|cpu={cpu_percent}%;{cpu_warn};{cpu_crit};0;100 memory={mem_percent}%;{mem_warn};{mem_crit};0;100"
+        )
 
         sys.exit(exit_code)
 
     except KeyboardInterrupt:
         print("UNKNOWN: Script interrupted")
-        sys.exit(ERRORS['UNKNOWN'])
+        sys.exit(ERRORS["UNKNOWN"])
     except Exception as e:
         print(f"UNKNOWN: Unexpected error - {e}")
-        sys.exit(ERRORS['UNKNOWN'])
+        sys.exit(ERRORS["UNKNOWN"])
+
 
 if __name__ == "__main__":
     main()
